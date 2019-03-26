@@ -1,0 +1,112 @@
+daml 1.2
+module Simple where
+
+template Account
+  with
+    owner: Party
+    balance: Decimal
+    things: [Thing]
+  where
+    ensure balance > 0.0
+    signatory owner
+    controller owner can
+      Add: ContractId Account
+      -- Only if:
+      -- Account.owner == Thing.owner
+      -- Account.balance - Thing.amount > 0
+        with
+          thing: Thing
+        do
+          assert (this.owner == thing.owner)
+          assert (this.balance - thing.amount > 0.0)
+          create this with
+            owner = owner
+            balance = balance - thing.amount
+            things = thing :: things
+
+template Thing
+  with
+    owner: Party
+    name: Text
+    amount: Decimal
+  where
+    ensure amount > 0.0
+    signatory owner
+    controller owner can
+      Send: ContractId Transfer
+        with
+          recipient: Party
+        do
+          create Transfer with
+            recipient = recipient
+            thing = this
+
+template Transfer
+  with
+    recipient: Party
+    thing: Thing
+  where
+    -- Don't permit sending things to onesself
+    ensure recipient /= thing.owner
+    signatory thing.owner
+    controller recipient can
+      Accept: ContractId Thing
+        do
+          create Thing with
+            owner = recipient
+            name = thing.name
+            amount = thing.amount
+      Reject: ContractId Thing
+        -- Don't know why this is necessary
+        -- Nor why it's "thing" rather than "Thing"
+        do create this.thing
+
+test =
+  scenario do
+
+    alice <- getParty "Alice"
+    bob <- getParty "Bob"
+
+    submit alice do
+      account1 <- create Account with
+        owner = alice
+        balance = 1000.0
+        things = []
+      thingID1 <- create Thing with
+        owner = alice
+        name = "thing1"
+        amount = 250.0
+      -- Don't know why I need to fetch it
+      thing1 <- fetch thingID1
+      -- Adding Things consumes Accounts
+      -- So we must acquire the new (!) Account when exercising Add
+      account1 <- exercise account1 Add with
+        thing = thing1
+      thingID2 <- create Thing with
+        owner = alice
+        name = "thing2"
+        amount = 250.0
+      thing2 <- fetch thingID2
+      exercise account1 Add with
+        thing = thing2
+
+
+    transfer1 <- submit alice do
+      thing1 <- create Thing with
+        owner = alice
+        name = "thing1"
+        amount = 100.0
+      exercise thing1 Send with
+        recipient = bob
+
+    transfer2 <- submit alice do
+      thing2 <- create Thing with
+        owner = alice
+        name = "thing2"
+        amount = 200.0
+      exercise thing2 Send with
+        recipient = bob
+
+    submit bob do
+      exercise transfer1 Accept
+      exercise transfer2 Reject    
